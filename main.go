@@ -165,7 +165,11 @@ func CreateTempFile(name string, content string) (string, error) {
 ////////////////////////////////////////////////////////////////////////////////
 func Authorize(manifest *Manifest) (*api.Client, error) {
 	config := api.DefaultConfig()
-	tls := api.TLSConfig{}
+	tls := api.TLSConfig{
+		CACert:     os.Getenv(api.EnvVaultCACert),
+		ClientCert: os.Getenv(api.EnvVaultClientCert),
+		ClientKey:  os.Getenv(api.EnvVaultClientKey),
+	}
 
 	if manifest.Vault != "" {
 		config.Address = manifest.Vault
@@ -181,10 +185,6 @@ func Authorize(manifest *Manifest) (*api.Client, error) {
 		tls.CACert = file
 	}
 
-	if tls.CACert == "" {
-		tls.CACert = os.Getenv(api.EnvVaultCACert)
-	}
-
 	if manifest.Certificate != "" {
 		file, err := CreateTempFile("cert.pem", manifest.Certificate)
 		if err != nil {
@@ -193,10 +193,6 @@ func Authorize(manifest *Manifest) (*api.Client, error) {
 		defer os.Remove(file)
 
 		tls.ClientCert = file
-	}
-
-	if tls.ClientKey == "" {
-		tls.ClientKey = os.Getenv(api.EnvVaultClientCert)
 	}
 
 	if manifest.Key != "" {
@@ -209,14 +205,6 @@ func Authorize(manifest *Manifest) (*api.Client, error) {
 		tls.ClientKey = file
 	}
 
-	if tls.ClientKey == "" {
-		tls.ClientKey = os.Getenv(api.EnvVaultClientKey)
-	}
-
-	if err := config.ConfigureTLS(&tls); err != nil {
-		return nil, errors.Wrap(err, "configure tls failed")
-	}
-
 	if tls.CACert == "" {
 		return nil, errors.Errorf("missing ca certificate")
 	}
@@ -227,6 +215,10 @@ func Authorize(manifest *Manifest) (*api.Client, error) {
 
 	if tls.ClientKey == "" {
 		return nil, errors.Errorf("missing client key")
+	}
+
+	if err := config.ConfigureTLS(&tls); err != nil {
+		return nil, errors.Wrap(err, "configure tls failed")
 	}
 
 	client, err := api.NewClient(config)
@@ -310,13 +302,13 @@ func GetSecrets(manifest *Manifest, client *api.Client) ([]string, error) {
 
 			case SecretOutputTypeVariable:
 				if secretInputType != SecretInputTypeString {
-					return errors.New("secret must be of type string to output to an environment variable")
+					return errors.Errorf("expected input type string was %v", secretInputType)
 				}
 
 				env = append(env, fmt.Sprintf("%v=%v", secret.Output.Name, value.(string)))
 
 			default:
-				return errors.Errorf("secret invalid output type: %v", secretOutputType)
+				return errors.Errorf("invalid output type: %v", secretOutputType)
 			}
 
 			return nil
