@@ -6,6 +6,10 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"os/user"
+	"path/filepath"
+	"strconv"
+	"syscall"
 
 	"github.com/hashicorp/vault/api"
 	"github.com/pkg/errors"
@@ -60,9 +64,12 @@ func (t SecretOutputType) WithDefault() SecretOutputType {
 // SecretOutput
 ////////////////////////////////////////////////////////////////////////////////
 type SecretOutput struct {
-	Name string           `yaml:"name,omitempty"`
-	Path string           `yaml:"path,omitempty"`
-	Type SecretOutputType `yaml:"type,omitempty"`
+	Group string           `yaml:"group,omitempty"`
+	Mode  *uint32          `yaml:"mode,omitempty"`
+	Name  string           `yaml:"name,omitempty"`
+	Path  string           `yaml:"path,omitempty"`
+	Type  SecretOutputType `yaml:"type,omitempty"`
+	User  string           `yaml:"user,omitempty"`
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -80,6 +87,8 @@ type Manifest struct {
 	Authority   string   `yaml:"authority,omitempty"`
 	Certificate string   `yaml:"certificate,omitempty"`
 	Command     string   `yaml:"command"`
+	Dir         string   `yaml:"dir,omitempty"`
+	User        string   `yaml:"user,omitempty"`
 	Key         string   `yaml:"key,omitempty"`
 	Secrets     []Secret `yaml:"secrets,omitempty"`
 	Vault       string   `yaml:"vault,omitempty"`
@@ -103,6 +112,53 @@ func (s *SecretCache) Get(client *api.Client, path string) (*api.Secret, error) 
 	(*s)[path] = secret
 
 	return secret, nil
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// LookupUser
+////////////////////////////////////////////////////////////////////////////////
+func LookupUser(username string) (uint32, uint32, error) {
+	u, err := user.Lookup(username)
+	if err != nil {
+		return 0, 0, errors.Wrapf(err, "lookup user %v failed", username)
+	}
+
+	uid, err := strconv.ParseUint(u.Uid, 10, 32)
+	if err != nil {
+		return 0, 0, errors.WithStack(err)
+	}
+
+	gid, err := strconv.ParseUint(u.Gid, 10, 32)
+	if err != nil {
+		return 0, 0, errors.WithStack(err)
+	}
+
+	return uint32(uid), uint32(gid), nil
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// LookupUid
+////////////////////////////////////////////////////////////////////////////////
+func LookupUid(username string) (int, error) {
+	uid, _, err := LookupUser(username)
+	return int(uid), err
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// LookupGid
+////////////////////////////////////////////////////////////////////////////////
+func LookupGid(groupname string) (int, error) {
+	g, err := user.LookupGroup(groupname)
+	if err != nil {
+		return 0, errors.WithStack(err)
+	}
+
+	gid64, err := strconv.ParseUint(g.Gid, 10, 32)
+	if err != nil {
+		return 0, errors.WithStack(err)
+	}
+
+	return int(gid64), nil
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -198,7 +254,7 @@ func Authorize(manifest *Manifest) (*api.Client, error) {
 	if manifest.Key != "" {
 		file, err := CreateTempFile("cert.key", manifest.Key)
 		if err != nil {
-			return nil, errors.Wrap(err, "create clietn key failed")
+			return nil, errors.Wrap(err, "create client key failed")
 		}
 		defer os.Remove(file)
 
@@ -273,11 +329,53 @@ func GetSecrets(manifest *Manifest, client *api.Client) ([]string, error) {
 				}
 
 				f := func() error {
-					output, err := os.OpenFile(secret.Output.Path, os.O_CREATE|os.O_WRONLY, 0644)
+					mode := os.FileMode(0600)
+
+					if stat, err := os.Stat(secret.Output.Path); err != nil {
+						mode = stat.Mode()
+					}
+
+					if secret.Output.Mode != nil {
+						mode = os.FileMode(*secret.Output.Mode)
+					}
+
+					abspath, err := filepath.Abs(secret.Output.Path)
+					if err != nil {
+						return errors.WithStack(err)
+					}
+
+					if err = os.MkdirAll(filepath.Dir(abspath), os.ModeDir); err != nil {
+						return errors.WithStack(err)
+					}
+
+					output, err := os.OpenFile(secret.Output.Path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
 					if err != nil {
 						return errors.Wrap(err, "open file failed")
 					}
 					defer output.Close()
+
+					// force the mode in case we are overwrting and existing file
+					os.Chmod(secret.Output.Path, mode)
+
+					uid := os.Getuid()
+
+					if secret.Output.User != "" {
+						uid, err = LookupUid(secret.Output.User)
+						if err != nil {
+							return errors.Errorf("invalid user: %v", secret.Output.User)
+						}
+					}
+
+					gid := os.Getgid()
+
+					if secret.Output.Group != "" {
+						gid, err = LookupGid(secret.Output.Group)
+						if err != nil {
+							return errors.Errorf("invalid user: %v", secret.Output.User)
+						}
+					}
+
+					os.Chown(secret.Output.Path, uid, gid)
 
 					switch secretInputType {
 					case SecretInputTypeBinary:
@@ -346,9 +444,22 @@ func main() {
 	check(err)
 
 	cmd := exec.Command("sh", "-c", manifest.Command)
+	cmd.Dir = manifest.Dir
 	cmd.Env = env
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+
+	if manifest.User != "" {
+		uid, gid, err := LookupUser(manifest.User)
+		check(err)
+
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			Credential: &syscall.Credential{
+				Uid: uid,
+				Gid: gid,
+			},
+		}
+	}
 
 	check(cmd.Run())
 }
