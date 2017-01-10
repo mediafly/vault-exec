@@ -330,7 +330,7 @@ func GetSecrets(manifest *Manifest, client *api.Client) ([]string, error) {
 				f := func() error {
 					mode := os.FileMode(0600)
 
-					if stat, err := os.Stat(secret.Output.Path); err != nil {
+					if stat, err := os.Stat(secret.Output.Path); os.IsExist(err) {
 						mode = stat.Mode()
 					}
 
@@ -343,7 +343,7 @@ func GetSecrets(manifest *Manifest, client *api.Client) ([]string, error) {
 						return errors.WithStack(err)
 					}
 
-					if err = os.MkdirAll(filepath.Dir(abspath), os.ModeDir); err != nil {
+					if err = os.MkdirAll(filepath.Dir(abspath), 0700); err != nil {
 						return errors.WithStack(err)
 					}
 
