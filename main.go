@@ -265,7 +265,7 @@ func Authorize(manifest *Manifest) (*api.Client, error) {
 		return nil, errors.Errorf("missing ca certificate")
 	}
 
-	if tls.ClientKey == "" {
+	if tls.ClientCert == "" {
 		return nil, errors.Errorf("missing client certificate")
 	}
 
