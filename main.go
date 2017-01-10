@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"io/ioutil"
-	"log"
 	"os"
 	"os/exec"
 	"os/user"
@@ -425,12 +424,14 @@ func GetSecrets(manifest *Manifest, client *api.Client) ([]string, error) {
 ////////////////////////////////////////////////////////////////////////////////
 func main() {
 	if len(os.Args) != 2 {
-		log.Fatalln("vault-exec [manifest]")
+		fmt.Fprintln(os.Stderr, "vault-exec [manifest]")
+		os.Exit(1)
 	}
 
 	check := func(err error) {
 		if err != nil {
-			log.Fatalf("%+v", err)
+			fmt.Fprintf(os.Stderr, "%+v\n", err)
+			os.Exit(2)
 		}
 	}
 
