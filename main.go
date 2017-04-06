@@ -80,9 +80,18 @@ type Secret struct {
 }
 
 ////////////////////////////////////////////////////////////////////////////////
+// Auth
+////////////////////////////////////////////////////////////////////////////////
+type Auth struct {
+	User     string `yaml:"user,omitempty"`
+	Password string `yaml:"pass,omitempty"`
+}
+
+////////////////////////////////////////////////////////////////////////////////
 // Manifest
 ////////////////////////////////////////////////////////////////////////////////
 type Manifest struct {
+	Auth        *Auth    `yaml:"auth,omitempty"`
 	Authority   string   `yaml:"authority,omitempty"`
 	Certificate string   `yaml:"certificate,omitempty"`
 	Command     string   `yaml:"command"`
@@ -90,6 +99,7 @@ type Manifest struct {
 	User        string   `yaml:"user,omitempty"`
 	Key         string   `yaml:"key,omitempty"`
 	Secrets     []Secret `yaml:"secrets,omitempty"`
+	Token       string   `yaml:"token,omitempty"`
 	Vault       string   `yaml:"vault,omitempty"`
 }
 
@@ -230,6 +240,10 @@ func Authorize(manifest *Manifest) (*api.Client, error) {
 		config.Address = manifest.Vault
 	}
 
+	if config.Address == "" {
+		return nil, errors.New("missing vault address")
+	}
+
 	if manifest.Authority != "" {
 		file, err := CreateTempFile("cacert.pem", manifest.Authority)
 		if err != nil {
@@ -261,15 +275,15 @@ func Authorize(manifest *Manifest) (*api.Client, error) {
 	}
 
 	if tls.CACert == "" {
-		return nil, errors.Errorf("missing ca certificate")
+		return nil, errors.New("missing ca certificate")
 	}
 
 	if tls.ClientCert == "" {
-		return nil, errors.Errorf("missing client certificate")
+		return nil, errors.New("missing client certificate")
 	}
 
 	if tls.ClientKey == "" {
-		return nil, errors.Errorf("missing client key")
+		return nil, errors.New("missing client key")
 	}
 
 	if err := config.ConfigureTLS(&tls); err != nil {
@@ -281,9 +295,25 @@ func Authorize(manifest *Manifest) (*api.Client, error) {
 		return nil, errors.Wrap(err, "create client failed")
 	}
 
-	secret, err := client.Logical().Write("auth/cert/login", nil)
+	if manifest.Auth == nil {
+		return nil, errors.New("missing auth")
+	}
+
+	if manifest.Auth.User == "" {
+		return nil, errors.New("missing auth user")
+	}
+
+	if manifest.Auth.Password == "" {
+		return nil, errors.New("missing auth password")
+	}
+
+	auth := map[string]interface{}{
+		"password": manifest.Auth.Password,
+	}
+
+	secret, err := client.Logical().Write("auth/userpass/login/"+manifest.Auth.User, auth)
 	if err != nil {
-		return nil, errors.Wrap(err, "login failed")
+		return nil, errors.Wrap(err, "auth failed")
 	}
 
 	client.SetToken(secret.Auth.ClientToken)
