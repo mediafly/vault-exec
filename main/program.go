@@ -346,9 +346,13 @@ func GetSecrets(manifest *Manifest, client *api.Client) ([]string, error) {
 				return errors.Wrap(err, "get failed")
 			}
 
+			if values == nil {
+				return errors.Errorf("path not found: %v", secret.Input.Path)
+			}
+
 			value, ok := values.Data[secret.Input.Key]
 			if !ok {
-				return errors.New("key not found")
+				return errors.Errorf("key not found: %v/%v", secret.Input.Path, secret.Input.Key)
 			}
 
 			switch secretOutputType {
