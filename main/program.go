@@ -457,8 +457,8 @@ func GetSecrets(manifest *Manifest, client *api.Client) ([]string, error) {
 // main
 ////////////////////////////////////////////////////////////////////////////////
 func main() {
-	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "vault-exec [manifest]")
+	if len(os.Args) < 2 {
+		fmt.Fprintln(os.Stderr, "vault-exec [manifest] <command> <arg> <arg>...")
 		os.Exit(1)
 	}
 
@@ -478,7 +478,13 @@ func main() {
 	env, err := GetSecrets(manifest, client)
 	check(err)
 
-	cmd := exec.Command("sh", "-c", manifest.Command)
+	args := []string{"sh", "-c", manifest.Command}
+
+	if len(os.Args) > 2 {
+		args = os.Args[2:]
+	}
+
+	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Dir = manifest.Dir
 	cmd.Env = env
 	cmd.Stdout = os.Stdout
